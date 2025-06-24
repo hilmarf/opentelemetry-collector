@@ -1,0 +1,4 @@
+FIXME: implement storage extension and resume if restarted!
+
+sample issue for data loss:
+https://github.com/open-telemetry/opentelemetry-collector/issues/12647

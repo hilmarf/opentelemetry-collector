@@ -1205,3 +1205,43 @@ func requireCurrentlyDispatchedItemsEqual(t *testing.T, pq *persistentQueue[uint
 	defer pq.mu.Unlock()
 	assert.ElementsMatch(t, compare, pq.metadata.CurrentlyDispatchedItems)
 }
+
+func TestPersistentQueue_Offer_DropsOnFullWithoutBlocking(t *testing.T) {
+	// persistentQueue mit Kapazität 2 und blockOnOverflow=false
+	client := storagetest.NewMockStorageClient()
+	pq := newPersistentQueue[uint64](persistentQueueSettings[uint64]{
+		sizer:           request.RequestsSizer[uint64]{},
+		capacity:        2,
+		blockOnOverflow: false,
+		signal:          pipeline.SignalTraces,
+		storageID:       component.ID{},
+		encoding:        uint64Encoding{},
+		id:              component.NewID(exportertest.NopType),
+		telemetry:       componenttest.NewNopTelemetrySettings(),
+	}).(*persistentQueue[uint64])
+	pq.initClient(context.Background(), client)
+
+	// Füge zwei Elemente hinzu (sollte funktionieren)
+	require.NoError(t, pq.Offer(context.Background(), 1))
+	require.NoError(t, pq.Offer(context.Background(), 2))
+	assert.Equal(t, int64(2), pq.Size())
+
+	// Drittes Element sollte abgelehnt werden
+	err := pq.Offer(context.Background(), 3)
+	assert.ErrorIs(t, err, ErrQueueIsFull)
+	assert.Equal(t, int64(2), pq.Size())
+
+	// Die ersten beiden Elemente sollten noch lesbar sein
+	_, val1, done1, ok1 := pq.Read(context.Background())
+	assert.True(t, ok1)
+	assert.Contains(t, []uint64{1, 2}, val1)
+	done1.OnDone(nil)
+	_, val2, done2, ok2 := pq.Read(context.Background())
+	assert.True(t, ok2)
+	assert.Contains(t, []uint64{1, 2}, val2)
+	done2.OnDone(nil)
+
+	// Danach ist die Queue leer
+	_, _, _, ok3 := pq.Read(context.Background())
+	assert.False(t, ok3)
+}
