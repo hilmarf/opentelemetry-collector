@@ -55,7 +55,7 @@ func NewQueueSender(
 		// be modified by the downstream components like the batcher.
 		itemsCount := req.ItemsCount()
 		if errSend := next.Send(ctx, req); errSend != nil {
-			qSet.Telemetry.Logger.Error("Exporting failed. Dropping data."+exportFailureMessage,
+			qSet.Telemetry.Logger.Error("Exporting failed. Dropping data."+exportFailureMessage, // FIXME: Dropping data
 				zap.Error(errSend), zap.Int("dropped_items", itemsCount))
 			return errSend
 		}
