@@ -182,7 +182,7 @@ func newConsumeMetrics(converter RequestConverterFunc[pmetric.Metrics], be *inte
 	return func(ctx context.Context, md pmetric.Metrics) error {
 		req, err := converter(ctx, md)
 		if err != nil {
-			logger.Error("Failed to convert metrics. Dropping data.",
+			logger.Error("Failed to convert metrics. Dropping data.", // FIXME: Dropping data
 				zap.Int("dropped_data_points", md.DataPointCount()),
 				zap.Error(err))
 			return consumererror.NewPermanent(err)

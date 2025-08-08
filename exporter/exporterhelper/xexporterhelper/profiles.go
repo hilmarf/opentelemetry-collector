@@ -185,7 +185,7 @@ func newConsumeProfiles(converter exporterhelper.RequestConverterFunc[pprofile.P
 	return func(ctx context.Context, pd pprofile.Profiles) error {
 		req, err := converter(ctx, pd)
 		if err != nil {
-			logger.Error("Failed to convert profiles. Dropping data.",
+			logger.Error("Failed to convert profiles. Dropping data.", // FIXME: Dropping data
 				zap.Int("dropped_samples", pd.SampleCount()),
 				zap.Error(err))
 			return consumererror.NewPermanent(err)
