@@ -24,9 +24,10 @@ func TestLocation_MoveTo(t *testing.T) {
 	assert.Equal(t, generateTestLocation(), dest)
 	dest.MoveTo(dest)
 	assert.Equal(t, generateTestLocation(), dest)
-	sharedState := internal.StateReadOnly
-	assert.Panics(t, func() { ms.MoveTo(newLocation(&otlpprofiles.Location{}, &sharedState)) })
-	assert.Panics(t, func() { newLocation(&otlpprofiles.Location{}, &sharedState).MoveTo(dest) })
+	sharedState := internal.NewState()
+	sharedState.MarkReadOnly()
+	assert.Panics(t, func() { ms.MoveTo(newLocation(internal.NewOrigLocation(), sharedState)) })
+	assert.Panics(t, func() { newLocation(internal.NewOrigLocation(), sharedState).MoveTo(dest) })
 }
 
 func TestLocation_CopyTo(t *testing.T) {
@@ -37,22 +38,19 @@ func TestLocation_CopyTo(t *testing.T) {
 	orig = generateTestLocation()
 	orig.CopyTo(ms)
 	assert.Equal(t, orig, ms)
-	sharedState := internal.StateReadOnly
-	assert.Panics(t, func() { ms.CopyTo(newLocation(&otlpprofiles.Location{}, &sharedState)) })
+	sharedState := internal.NewState()
+	sharedState.MarkReadOnly()
+	assert.Panics(t, func() { ms.CopyTo(newLocation(internal.NewOrigLocation(), sharedState)) })
 }
 
 func TestLocation_MappingIndex(t *testing.T) {
 	ms := NewLocation()
 	assert.Equal(t, int32(0), ms.MappingIndex())
 	ms.SetMappingIndex(int32(13))
-	assert.True(t, ms.HasMappingIndex())
 	assert.Equal(t, int32(13), ms.MappingIndex())
-	ms.RemoveMappingIndex()
-	assert.False(t, ms.HasMappingIndex())
-	dest := NewLocation()
-	dest.SetMappingIndex(int32(13))
-	ms.CopyTo(dest)
-	assert.False(t, dest.HasMappingIndex())
+	sharedState := internal.NewState()
+	sharedState.MarkReadOnly()
+	assert.Panics(t, func() { newLocation(&otlpprofiles.Location{}, sharedState).SetMappingIndex(int32(13)) })
 }
 
 func TestLocation_Address(t *testing.T) {
@@ -60,8 +58,9 @@ func TestLocation_Address(t *testing.T) {
 	assert.Equal(t, uint64(0), ms.Address())
 	ms.SetAddress(uint64(13))
 	assert.Equal(t, uint64(13), ms.Address())
-	sharedState := internal.StateReadOnly
-	assert.Panics(t, func() { newLocation(&otlpprofiles.Location{}, &sharedState).SetAddress(uint64(13)) })
+	sharedState := internal.NewState()
+	sharedState.MarkReadOnly()
+	assert.Panics(t, func() { newLocation(&otlpprofiles.Location{}, sharedState).SetAddress(uint64(13)) })
 }
 
 func TestLocation_Line(t *testing.T) {
@@ -69,15 +68,6 @@ func TestLocation_Line(t *testing.T) {
 	assert.Equal(t, NewLineSlice(), ms.Line())
 	ms.orig.Line = internal.GenerateOrigTestLineSlice()
 	assert.Equal(t, generateTestLineSlice(), ms.Line())
-}
-
-func TestLocation_IsFolded(t *testing.T) {
-	ms := NewLocation()
-	assert.False(t, ms.IsFolded())
-	ms.SetIsFolded(true)
-	assert.True(t, ms.IsFolded())
-	sharedState := internal.StateReadOnly
-	assert.Panics(t, func() { newLocation(&otlpprofiles.Location{}, &sharedState).SetIsFolded(true) })
 }
 
 func TestLocation_AttributeIndices(t *testing.T) {
@@ -88,7 +78,6 @@ func TestLocation_AttributeIndices(t *testing.T) {
 }
 
 func generateTestLocation() Location {
-	ms := NewLocation()
-	internal.FillOrigTestLocation(ms.orig)
+	ms := newLocation(internal.GenTestOrigLocation(), internal.NewState())
 	return ms
 }

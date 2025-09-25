@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	config "go.opentelemetry.io/contrib/otelconf/v0.3.0"
@@ -40,7 +41,7 @@ import (
 	"go.opentelemetry.io/collector/service/internal/builders"
 	"go.opentelemetry.io/collector/service/internal/promtest"
 	"go.opentelemetry.io/collector/service/pipelines"
-	"go.opentelemetry.io/collector/service/telemetry"
+	"go.opentelemetry.io/collector/service/telemetry/otelconftelemetry"
 )
 
 type labelState int
@@ -298,7 +299,7 @@ func TestServiceTelemetryLogging(t *testing.T) {
 	}
 
 	cfg := newNopConfig()
-	cfg.Telemetry.Logs.Sampling = &telemetry.LogsSamplingConfig{
+	cfg.Telemetry.Logs.Sampling = &otelconftelemetry.LogsSamplingConfig{
 		Enabled:    true,
 		Tick:       time.Minute,
 		Initial:    2,
@@ -544,6 +545,17 @@ func TestServiceTelemetryShutdownError(t *testing.T) {
 			},
 		},
 	}}
+	cfg.Telemetry.Metrics.Level = configtelemetry.LevelDetailed
+	cfg.Telemetry.Metrics.Readers = []config.MetricReader{{
+		Periodic: &config.PeriodicMetricReader{
+			Exporter: config.PushMetricExporter{
+				OTLP: &config.OTLPMetric{
+					Protocol: ptr("http/protobuf"),
+					Endpoint: ptr("http://testing.invalid"),
+				},
+			},
+		},
+	}}
 
 	// Create and start a service
 	srv, err := New(context.Background(), newNopSettings(), cfg)
@@ -552,7 +564,8 @@ func TestServiceTelemetryShutdownError(t *testing.T) {
 
 	// Shutdown the service
 	err = srv.Shutdown(context.Background())
-	assert.ErrorContains(t, err, `failed to shutdown telemetry`)
+	require.ErrorContains(t, err, `failed to shutdown logger`)
+	require.ErrorContains(t, err, `failed to shutdown meter provider`)
 }
 
 func TestExtensionNotificationFailure(t *testing.T) {
@@ -634,40 +647,74 @@ func TestServiceFatalError(t *testing.T) {
 func TestServiceInvalidTelemetryConfiguration(t *testing.T) {
 	tests := []struct {
 		name    string
-		wantErr error
-		cfg     telemetry.Config
+		wantErr string
+		cfg     otelconftelemetry.Config
 	}{
 		{
 			name: "log config with processors and invalid config",
-			cfg: telemetry.Config{
-				Logs: telemetry.LogsConfig{
-					Encoding: "console",
-					Processors: []config.LogRecordProcessor{
-						{
-							Batch: &config.BatchLogRecordProcessor{
-								Exporter: config.LogRecordExporter{
-									OTLP: &config.OTLP{},
-								},
-							},
+			cfg: func() otelconftelemetry.Config {
+				cfg := otelconftelemetry.NewFactory().CreateDefaultConfig().(*otelconftelemetry.Config)
+				cfg.Logs.Level = zapcore.FatalLevel
+				cfg.Logs.Processors = []config.LogRecordProcessor{{
+					Batch: &config.BatchLogRecordProcessor{
+						Exporter: config.LogRecordExporter{
+							OTLP: &config.OTLP{},
 						},
 					},
-				},
-			},
-			wantErr: errors.New("no valid log exporter"),
+				}}
+				return *cfg
+			}(),
+			wantErr: "failed to create logger: no valid log exporter",
+		},
+		{
+			name: "invalid metric reader",
+			cfg: func() otelconftelemetry.Config {
+				cfg := otelconftelemetry.NewFactory().CreateDefaultConfig().(*otelconftelemetry.Config)
+				cfg.Logs.Level = zapcore.FatalLevel
+				cfg.Metrics.Level = configtelemetry.LevelDetailed
+				cfg.Metrics.Readers = []config.MetricReader{{
+					Periodic: &config.PeriodicMetricReader{
+						Exporter: config.PushMetricExporter{
+							OTLP: &config.OTLPMetric{},
+						},
+					},
+				}}
+				return *cfg
+			}(),
+			wantErr: "failed to create meter provider: no valid metric exporter",
+		},
+		{
+			name: "invalid trace exporter",
+			cfg: func() otelconftelemetry.Config {
+				cfg := otelconftelemetry.NewFactory().CreateDefaultConfig().(*otelconftelemetry.Config)
+				cfg.Logs.Level = zapcore.FatalLevel
+				cfg.Traces.Level = configtelemetry.LevelDetailed
+				cfg.Traces.Processors = []config.SpanProcessor{{
+					Batch: &config.BatchSpanProcessor{
+						Exporter: config.SpanExporter{
+							OTLP: &config.OTLP{},
+						},
+					},
+				}}
+				return *cfg
+			}(),
+			wantErr: "failed to create tracer provider: no valid span exporter",
 		},
 	}
 	for _, tt := range tests {
-		set := newNopSettings()
-		set.AsyncErrorChannel = make(chan error)
+		t.Run(tt.name, func(t *testing.T) {
+			set := newNopSettings()
+			set.AsyncErrorChannel = make(chan error)
 
-		cfg := newNopConfig()
-		cfg.Telemetry = tt.cfg
-		_, err := New(context.Background(), set, cfg)
-		if tt.wantErr != nil {
-			require.ErrorContains(t, err, tt.wantErr.Error())
-		} else {
-			require.NoError(t, err)
-		}
+			cfg := newNopConfig()
+			cfg.Telemetry = tt.cfg
+			_, err := New(context.Background(), set, cfg)
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
 }
 
@@ -699,7 +746,7 @@ func assertMetrics(t *testing.T, metricsAddr string, expectedLabels map[string]l
 	})
 	reader := bufio.NewReader(resp.Body)
 
-	var parser expfmt.TextParser
+	parser := expfmt.NewTextParser(model.UTF8Validation)
 	parsed, err := parser.TextToMetricFamilies(reader)
 	require.NoError(t, err)
 
@@ -809,12 +856,12 @@ func newNopConfigPipelineConfigs(pipelineCfgs pipelines.Config) Config {
 	return Config{
 		Extensions: extensions.Config{component.NewID(nopType)},
 		Pipelines:  pipelineCfgs,
-		Telemetry: telemetry.Config{
-			Logs: telemetry.LogsConfig{
+		Telemetry: otelconftelemetry.Config{
+			Logs: otelconftelemetry.LogsConfig{
 				Level:       zapcore.InfoLevel,
 				Development: false,
 				Encoding:    "console",
-				Sampling: &telemetry.LogsSamplingConfig{
+				Sampling: &otelconftelemetry.LogsSamplingConfig{
 					Enabled:    true,
 					Tick:       10 * time.Second,
 					Initial:    100,
@@ -826,7 +873,7 @@ func newNopConfigPipelineConfigs(pipelineCfgs pipelines.Config) Config {
 				DisableStacktrace: false,
 				InitialFields:     map[string]any(nil),
 			},
-			Metrics: telemetry.MetricsConfig{
+			Metrics: otelconftelemetry.MetricsConfig{
 				Level: configtelemetry.LevelBasic,
 			},
 		},
